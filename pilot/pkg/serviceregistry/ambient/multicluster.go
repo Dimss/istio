@@ -259,7 +259,7 @@ func (a *index) buildGlobalCollections(
 
 	GlobalMergedWorkloadServicesWithCluster := krt.NestedJoinWithMergeCollection(
 		GlobalWorkloadServicesWithCluster,
-		mergeServiceInfosWithCluster(localCluster.ID),
+		mergeServiceInfosWithCluster(localCluster.ID, LocalMeshConfig.Get().TrustDomain),
 		opts.WithName("GlobalMergedServiceInfosWithCluster")...,
 	)
 
@@ -466,7 +466,6 @@ func (a *index) buildGlobalCollections(
 			if svc.Scope != model.Global {
 				return &svc
 			}
-
 			wls := GlobalWorkloadServiceIndex.Fetch(ctx, svc.ResourceName())
 			if len(wls) == 0 {
 				return &svc
@@ -621,6 +620,7 @@ func networkAddressToSimple(a *workloadapi.NetworkAddress) simpleNetworkAddress 
 
 func mergeServiceInfosWithCluster(
 	localClusterID cluster.ID,
+	trustDomain string,
 ) func(serviceInfos []krt.ObjectWithCluster[model.ServiceInfo]) *krt.ObjectWithCluster[model.ServiceInfo] {
 	return func(serviceInfos []krt.ObjectWithCluster[model.ServiceInfo]) *krt.ObjectWithCluster[model.ServiceInfo] {
 		svcInfosLen := len(serviceInfos)
@@ -685,7 +685,13 @@ func mergeServiceInfosWithCluster(
 			// VIP uniqueness within a network
 			vips.InsertAll(slices.Map(obj.Object.Service.GetAddresses(), networkAddressToSimple)...)
 			sans.InsertAll(obj.Object.Service.GetSubjectAltNames()...)
-
+			// If base service have no waypoint but remote do, we need to add remote service waypoint SA into sans
+			// otherwise request will fail on identity verification error
+			if obj.Object.Service.GetWaypoint() != nil && base.Object.Service.GetWaypoint() == nil {
+				for _, sa := range obj.Object.Waypoint.ServiceAccounts {
+					sans.Insert(spiffe.MustGenSpiffeURIForTrustDomain(trustDomain, obj.Object.Service.Namespace, sa))
+				}
+			}
 		}
 
 		basePorts := sets.New(slices.Map(base.Object.Service.Ports, workloadPortsToSimplePort)...)
